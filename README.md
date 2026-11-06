@@ -2,6 +2,13 @@
 
 Android Studio starter project. This is source code, not a compiled APK.
 
+## What changed in v0.4.1
+- Weapon type fallback: known exotics (for example Ouroboros, Chameleon) map to their type, and "+x% Assault Rifle Damage" style lines are used even when the Attributes header is misread.
+- Core Stats are only read from a line that starts with Total DMG, so a misread DMG no longer shifts RPM/MAG (Bluescreen, Big Alejandro). RPM above 1000 is supported, and expertise progress counters such as "80694/88000" are ignored.
+- Model names misread by OCR are corrected (GRS -> GR9), exotic talents were added to the catalog, and trailing OCR junk is trimmed from talent names.
+- Weapons with no visible Core Stats show "Missing DMG/RPM/MAG" so they are easy to fix by hand.
+- Clip test: 15/15 items with the correct type, rarity and name. 12/15 have DMG/RPM/MAG; the other 3 never show the Core Stats area in the clip.
+
 ## What changed in v0.4 (tuned on a real 1080p clip)
 - **Layout-aware detection.** Instead of reading the whole screen, the app finds the orange highlighted row in the stash list, reads only that row for the item name, and reads only the details panel on the right. Character stats, button hints and the other list rows no longer leak into results. Crop positions are fractions of the frame, so 4K/1440p/1080p captures all work.
 - **Item grouping by highlighted row.** A new item starts when the highlight moves or the highlighted name changes, so it still works when the highlight stays in place while the list scrolls. Frames taken mid-movement are skipped, one-frame misreads are absorbed, and stale panels left over from the previous item are dropped.

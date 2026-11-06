@@ -657,6 +657,9 @@ class MainActivity : AppCompatActivity() {
             if (item.mainStat > 0) line3.add("DMG %,d".format(item.mainStat))
             if (item.rpm > 0) line3.add("RPM ${item.rpm}")
             if (item.mag > 0) line3.add("MAG ${item.mag}")
+            val missing = listOfNotNull("DMG".takeIf { item.mainStat == 0L }, "RPM".takeIf { item.rpm == 0 },
+                "MAG".takeIf { item.mag == 0 })
+            if (missing.isNotEmpty()) line3.add("Missing ${missing.joinToString("/")} (Core Stats not visible in clip)")
         } else if (item.mainStat > 0) line3.add("Stat: %,d".format(item.mainStat))
         if (line3.isNotEmpty()) body.addView(label(line3.joinToString("  •  "), 13f, SUBTLE))
         if (item.attributes.isNotBlank()) body.addView(label(item.attributes.replace("; ", "  •  "), 12f, MUTED))

@@ -61,6 +61,9 @@ object Catalog {
     )
 
     val talents = listOf(
+        // Exotic weapon talents seen in stash panels
+        "payment in kind", "breathe free", "big game hunter", "rule them all", "perturb", "adaptive instincts",
+        "disruptor rounds", "plague of the outcasts", "cover shooter", "perfect precision strike", "eyeless",
         // Gear talents (chest / backpack)
         "obliterate", "glass cannon", "unbreakable", "vigilance", "spotter", "intimidate", "headhunter",
         "kinetic momentum", "tamper proof", "bloodsucker", "clutch", "composure", "concussion", "galvanize",
@@ -101,13 +104,34 @@ object Catalog {
     fun isUiNoise(line: String) = line.lowercase(Locale.US).trim() in uiNoise
 
     /** Exotic weapons whose rarity label may be scrolled out of view in the details panel. */
-    val exoticWeapons = listOf("big alejandro", "bluescreen", "bullet king", "pestilence", "agitator", "chameleon",
-        "strega", "the bighorn", "backfire", "lady death", "ouroboros", "eagle bearer", "st elmo's engine",
-        "capacitor", "scorpio", "liberty", "regulus", "nemesis", "sweet dreams", "merciless", "ravenous",
-        "the ravenous", "dread edict", "diamondback", "lady death", "bighorn", "chatterbox", "busy little bee",
-        "mantis", "the mop", "oxpecker", "monster", "doctor home", "harmony", "sacrum imperium",
-        "lexington", "centurion", "iron lung", "the railsplitter", "kingbreaker", "goalkeeper", "ekim's long stick")
-    fun isKnownExotic(name: String) = name.lowercase(Locale.US).trim().let { n -> exoticWeapons.any { it == n } }
+    /** Exotic weapons and their types; used when the rarity/type lines are scrolled out of view. */
+    val exoticWeapons = mapOf(
+        "big alejandro" to "LMG", "bluescreen" to "LMG", "bullet king" to "LMG", "pestilence" to "LMG",
+        "agitator" to "Assault Rifle", "chameleon" to "Assault Rifle", "strega" to "Assault Rifle",
+        "the bighorn" to "Assault Rifle", "eagle bearer" to "Assault Rifle", "st elmo's engine" to "Assault Rifle",
+        "capacitor" to "Assault Rifle", "backfire" to "SMG", "lady death" to "SMG", "ouroboros" to "SMG",
+        "the chatterbox" to "SMG", "oxpecker" to "SMG", "scorpio" to "Shotgun", "sweet dreams" to "Shotgun",
+        "liberty" to "Pistol", "regulus" to "Pistol", "nemesis" to "Marksman Rifle", "the ravenous" to "Rifle"
+    )
+    fun isKnownExotic(name: String) = exoticWeapons.containsKey(name.lowercase(Locale.US).trim())
+    fun exoticType(name: String) = exoticWeapons[name.lowercase(Locale.US).trim()]
+
+    /** Weapon model names that contain digits, which OCR tends to misread (GR9 -> GRS). */
+    val modelNames = listOf("GR9", "M60", "M249", "RPK-74", "MG5", "L86", "M4", "AK-M", "P416", "G36", "FAMAS 2010",
+        "AUG A3", "MP5", "MP7", "UMP-45", "T821", "MPX", "P90", "MK17", "M1A", "SRS", "G28", "M700", "SVD", "1886",
+        "M870", "SPAS-12", "SASG-12", "M1911", "93R", "X-45", "D50", "PF45", "SMG-9", "PP-19", "CTAR-21", "F2000",
+        "ACR", "SIG 556", "SG 553", "AK-74", "M16A2", "M44", "SR-1", "G2", "KSG", "M32A1", "ACS-12")
+    private fun confusable(s: String) = s.uppercase(Locale.US).replace(Regex("[^A-Z0-9]"), "")
+        .map { when (it) { '5', '9', '$' -> 'S'; '0', 'D', 'Q' -> 'O'; '1', 'I', 'L' -> 'I'; '8' -> 'B'; '2' -> 'Z'; '6' -> 'G'; else -> it } }
+        .joinToString("")
+    /** Replaces a misread model name with the catalog spelling when they match after OCR-confusable folding. */
+    fun fixModelName(name: String): String {
+        val words = name.trim().split(Regex("\\s+"))
+        return words.joinToString(" ") { w ->
+            if (w.none(Char::isDigit) && w.length > 4) w
+            else modelNames.firstOrNull { it.count(Char::isDigit) > 0 && confusable(it) == confusable(w) && it != w } ?: w
+        }.let { if (it == name.trim()) name else it }
+    }
 
     fun rarityRank(r: String) = rarities.indexOf(r).let { if (it < 0) 99 else it }
     fun slotRank(s: String) = allSlots.indexOf(s).let { if (it < 0) 99 else it }
@@ -265,7 +289,8 @@ object ItemParser {
         // Talent: the first line under the "Talents" header; otherwise a known talent name on its own line.
         val talentSection = bySection["talent"].orEmpty()
         val talent = talentSection.firstOrNull { it.count(Char::isLetter) >= 3 }?.let { cleanName(it) }
-            ?.let { t -> Catalog.talents.firstOrNull { norm(t).trim().startsWith("$it ") }?.let { titleCase(it) } ?: t }
+            ?.let { t -> Catalog.talents.firstOrNull { norm(t).trim().startsWith("$it ") }?.let { titleCase(it) }
+                ?: t.replace(Regex("(\\s+[A-Z]{1,3})+$"), "") }
             ?: lines.firstNotNullOfOrNull { line ->
                 val n = norm(line).trim()
                 if (n.length > 34) null
@@ -292,24 +317,38 @@ object ItemParser {
         val labelIdx = coreStats.indexOfFirst { norm(it).contains(" total ") || norm(it).contains(" rpm ") }
         if (labelIdx >= 0) {
             val valueLine = coreStats.drop(labelIdx + 1).firstOrNull { l ->
-                l.split(Regex("\\s+")).count { parseNumber(it.trimStart('$', '}', '|', '\'')) != null } >= 2
+                // A real value line starts with Total DMG (a number of 1000+, e.g. "57.66k"); lines where the DMG was
+                // misread ("37 00 = 200", "20 200") would otherwise shift the RPM/MAG values.
+                val n = statNumbers(l)
+                n.size >= 2 && n.first() >= 1000 && !hasKey(norm(l), "rank") && !hasKey(norm(l), "progress")
             }
             if (valueLine != null) {
-                val nums = valueLine.split(Regex("\\s+")).mapNotNull { parseNumber(it.trimStart('$', '}', '|', '\'')) }
-                val dmg = nums.firstOrNull { it >= 1000 }
-                if (dmg != null) mainStat = dmg
-                val rest = nums.dropWhile { it >= 1000 }
-                rpm = rest.getOrNull(0)?.toInt() ?: 0
-                mag = rest.getOrNull(1)?.toInt() ?: 0
+                val nums = statNumbers(valueLine)
+                mainStat = nums.first()
+                // RPM can exceed 1000 (e.g. 1100), so only the first number is the damage value.
+                val rest = nums.drop(1)
+                rpm = rest.getOrNull(0)?.toInt()?.takeIf { it in 30..2000 } ?: 0
+                mag = rest.getOrNull(1)?.toInt()?.takeIf { it in 1..300 } ?: 0
             }
         }
-        if (mainStat == 0L) {
+        // Fallback for panels without a readable stat line (gear): the largest plain number, ignoring progress
+        // counters such as "82544/88000". Weapons keep 0 instead of guessing.
+        val weaponLike = listOf("rpm", "weapon handling", "proficiency", "rank progress", "reload time", "optimal range")
+            .any { hasKey(norm(raw), it) }
+        if (mainStat == 0L && coreStats.isEmpty() && !weaponLike) {
             mainStat = Regex("\\b[0-9]{1,3}(?:[.][0-9]{1,2})?k\\b|\\b[0-9]{1,3}(?:,[0-9]{3})+\\b|\\b[0-9]{4,7}\\b")
-                .findAll(raw.lowercase(Locale.US)).mapNotNull { parseNumber(it.value) }.maxOrNull() ?: 0L
+                .findAll(raw.lowercase(Locale.US).replace(Regex("[0-9.,]+\\s*/\\s*\\S*[0-9.,]+"), " ")).mapNotNull { parseNumber(it.value) }.maxOrNull() ?: 0L
         }
 
         // Attributes from the Core Attributes and Attributes sections: "Name value%".
-        val attrLines = bySection["core attributes"].orEmpty() + bySection["attribute"].orEmpty()
+        // Attribute lines look like "+11.6% Assault Rifle Damage". When the section header is misread they end up in
+        // another section, so such lines are also taken from anywhere except mods/talents. Expertise lines
+        // ("30 +30.0% Weapon Damage") start with a rank number and are not matched.
+        // Stray lines need a one-decimal roll ("11.6%") and cannot be the expertise "Weapon Damage" bonus.
+        val attrPattern = Regex("^[^A-Za-z0-9+]*\\+?[0-9]+[.,][0-9]\\s*%\\s+[A-Za-z]")
+        val stray = bySection.filterKeys { it !in setOf("mod", "talent", "core attributes", "attribute", "expertise") }
+            .values.flatten().filter { attrPattern.containsMatchIn(it) && !hasKey(norm(it), "weapon damage") }
+        val attrLines = bySection["core attributes"].orEmpty() + bySection["attribute"].orEmpty() + stray
         val attributes = attrLines.mapNotNull { l ->
             val name = Catalog.matchAttribute(l) ?: return@mapNotNull null
             val value = Regex("([0-9]+(?:[.,][0-9])?)\\s*%").find(l)?.groupValues?.get(1)?.replace(',', '.')
@@ -376,6 +415,10 @@ object ItemParser {
 
     private fun attrName(entry: String) = entry.removeSuffix("%").trimEnd { c -> c.isDigit() || c == '.' }.trim()
 
+    /** Numbers on a Core Stats line, skipping progress counters like "80694/88000". */
+    private fun statNumbers(line: String) = line.split(Regex("\\s+")).filterNot { it.contains('/') }
+        .mapNotNull { parseNumber(it.trim('$', '}', '|', '\'', '[', ']')) }
+
     /** Parses every frame of an item separately and keeps the most common value for each field. */
     fun parseFrames(panels: List<String>, knownName: String = ""): ParsedFields {
         val parsed = panels.filter { it.isNotBlank() }.map { parse(it, knownName) }
@@ -390,12 +433,13 @@ object ItemParser {
             .map { (_, v) -> v.filter { it.endsWith("%") }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key ?: v.first() }
             .joinToString("; ")
         val mods = parsed.flatMap { it.mods.split("; ").filter(String::isNotBlank) }.distinct().take(5).joinToString("; ")
-        val name = knownName.ifBlank { vote({ it.name }) { it.isBlank() } }
+        val name = Catalog.fixModelName(knownName.ifBlank { vote({ it.name }) { it.isBlank() } })
         // Fallback: infer the weapon type from the core weapon-damage attribute ("Assault Rifle Damage").
         val slot = vote({ it.slot }) { it == UNKNOWN }.let { s ->
             if (s != UNKNOWN) s else {
-                val a = norm(attrs)
-                listOf("assault rifle damage" to "Assault Rifle", "marksman rifle damage" to "Marksman Rifle",
+                // Use parsed attributes plus any "+x% ... Damage" line, since the section header is often misread.
+                val a = norm(attrs) + norm(panels.flatMap { it.lines() }.filter { it.contains('%') }.joinToString(" "))
+                Catalog.exoticType(name) ?: listOf("assault rifle damage" to "Assault Rifle", "marksman rifle damage" to "Marksman Rifle",
                     "smg damage" to "SMG", "lmg damage" to "LMG", "shotgun damage" to "Shotgun",
                     "pistol damage" to "Pistol", "rifle damage" to "Rifle")
                     .firstOrNull { hasKey(a, it.first) }?.second ?: UNKNOWN
@@ -425,6 +469,7 @@ object ItemParser {
         val known = if (keepName) item.name else ""
         val p = if (panels != null) parseFrames(panels, known) else parse(item.rawText, known)
         if (!keepName || item.name.isBlank()) item.name = p.name
+        item.name = Catalog.fixModelName(item.name)
         item.category = p.category; item.slot = p.slot; item.rarity = p.rarity; item.brand = p.brand
         item.gearSet = p.gearSet; item.talent = p.talent; item.core = p.core; item.mainStat = p.mainStat
         item.rpm = p.rpm; item.mag = p.mag; item.attributes = p.attributes; item.mods = p.mods
