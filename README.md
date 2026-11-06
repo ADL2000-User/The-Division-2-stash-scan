@@ -1,6 +1,20 @@
-# Division 2 Stash Scanner — Xbox 4K / 1440p / 1080p (v0.3)
+# Division 2 Stash Scanner — Xbox 4K / 1440p / 1080p (v0.4)
 
 Android Studio starter project. This is source code, not a compiled APK.
+
+## What changed in v0.4 (tuned on a real 1080p clip)
+- **Layout-aware detection.** Instead of reading the whole screen, the app finds the orange highlighted row in the stash list, reads only that row for the item name, and reads only the details panel on the right. Character stats, button hints and the other list rows no longer leak into results. Crop positions are fractions of the frame, so 4K/1440p/1080p captures all work.
+- **Item grouping by highlighted row.** A new item starts when the highlight moves or the highlighted name changes, so it still works when the highlight stays in place while the list scrolls. Frames taken mid-movement are skipped, one-frame misreads are absorbed, and stale panels left over from the previous item are dropped.
+- **Per-frame voting.** Every frame of an item is parsed on its own, then the most common value wins for each field. This lets you scroll the details panel while hovering an item, and fields from the top and bottom of the panel get merged.
+- **New fields:** RPM, magazine size, attributes with values, augment, expertise/proficiency and weapon mods. "Equipped Items" text is excluded. OCR fixes cover "+" read as 1/4, dropped decimals and comma decimals ("90,25k").
+- Added the Prototype rarity, a weapon type fallback from the core damage attribute, a "Has attribute" filter, and RPM/MAG sorts.
+- Clip test result: 15/15 items found with correct names and time ranges. 13/15 have the right weapon type, all have a rarity, and most have DMG/RPM/MAG and talent.
+
+## Recommended capture procedure (v0.4)
+1. Record at 1080p or higher with the stash open (the weapons or gear tab).
+2. Move the highlight onto an item and keep it there for 5–8 seconds.
+3. While it is highlighted, scroll the details panel from top to bottom so talents, attributes and mods come into view.
+4. Then move to the next item. Avoid comparison popups.
 
 ## What changed in v0.3
 - **1080p (and 1440p) support.** Resolution is read from the video and a capture profile is chosen automatically (4K, 1440p, 1080p, 720p best-effort), or pick one manually. 1080p frames are upscaled 1.5× before OCR so small tooltip text stays readable; 4K frames are still reduced to 2560 px wide to save memory.

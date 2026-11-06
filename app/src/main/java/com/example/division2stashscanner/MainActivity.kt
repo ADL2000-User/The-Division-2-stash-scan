@@ -31,7 +31,7 @@ import java.io.OutputStreamWriter
 import java.util.Locale
 import kotlin.coroutines.resume
 
-/** Capture resolution profiles. [ocrScale] is applied to each decoded frame before OCR. */
+/** Capture resolution profiles. The stash layout is the same at every resolution; only OCR scaling differs. */
 enum class CaptureProfile(val label: String) {
     AUTO("Auto-detect from video"),
     UHD_4K("4K (2160p)"),
@@ -51,15 +51,6 @@ enum class CaptureProfile(val label: String) {
             }
         }
     }
-
-    /** 4K is reduced to save memory; 1080p/720p are upscaled so small tooltip text is large enough for ML Kit. */
-    fun ocrScale(frameWidth: Int): Float = when (this) {
-        UHD_4K -> if (frameWidth > 2560) 2560f / frameWidth else 1f
-        QHD_1440 -> 1f
-        FHD_1080 -> 1.5f
-        HD_720 -> 2f
-        AUTO -> 1f
-    }
 }
 
 class MainActivity : AppCompatActivity() {
@@ -67,7 +58,6 @@ class MainActivity : AppCompatActivity() {
         private const val PICK_VIDEO = 1001
         private const val SAVE_CSV = 1002
         private const val ALL = "All"
-        private const val MAX_OCR_WIDTH = 3840
         private val BG = 0xFF15191D.toInt()
         private val PANEL = 0xFF232A31.toInt()
         private val PANEL_DARK = 0xFF1B2126.toInt()
@@ -77,7 +67,7 @@ class MainActivity : AppCompatActivity() {
         private val WARN = 0xFFFFC58A.toInt()
 
         private val SORTS = listOf("Video order", "Name (A–Z)", "Slot / type", "Brand / set", "Rarity (Exotic first)",
-            "Main stat (high–low)", "Tag", "Talent")
+            "Total damage / main stat (high–low)", "Tag", "Talent", "RPM (high–low)", "Magazine (high–low)")
         private val GROUPS = listOf("No grouping", "Category", "Slot / type", "Brand / set", "Rarity", "Talent",
             "Core attribute", "Tag", "Source video")
         private val DUPES = listOf("Show all copies", "Hide repeats", "Only repeats")
@@ -108,6 +98,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var spTalent: Spinner
     private lateinit var spCore: Spinner
     private lateinit var spTag: Spinner
+    private lateinit var spAttr: Spinner
     private lateinit var spDupes: Spinner
     private lateinit var spSort: Spinner
     private lateinit var spGroup: Spinner
@@ -182,8 +173,8 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(BG)
         }
         root.addView(label("DIVISION 2\nSTASH SCANNER", 25f, bold = true))
-        root.addView(label("XBOX • 4K / 1440p / 1080p CAPTURE • v0.3", 12f, 0xFFFFB36B.toInt()).apply { setPadding(0, dp(6), 0, dp(10)) })
-        root.addView(label("Record your stash with each item panel visible for a few seconds, then import the clip. " +
+        root.addView(label("XBOX • 4K / 1440p / 1080p CAPTURE • v0.4", 12f, 0xFFFFB36B.toInt()).apply { setPadding(0, dp(6), 0, dp(10)) })
+        root.addView(label("Record your stash: highlight an item, scroll its details panel for 5+ seconds, then move to the next item. " +
             "4K, 1440p and 1080p recordings are supported; the resolution is detected automatically.", 14f, SUBTLE))
 
         // --- Capture & scan
@@ -207,7 +198,7 @@ class MainActivity : AppCompatActivity() {
         spHold = spinner(listOf("5 seconds", "4 seconds", "3 seconds", "2 seconds")) {}
         root.addView(labeledRow("Min. time on item", spHold))
         cbEnhance = CheckBox(this).apply {
-            text = "Boost text contrast (recommended for 1080p)"; setTextColor(SUBTLE); textSize = 13f
+            text = "Boost text contrast (try if text is misread)"; setTextColor(SUBTLE); textSize = 13f
         }
         root.addView(cbEnhance)
 
@@ -251,6 +242,7 @@ class MainActivity : AppCompatActivity() {
         spTalent = spinner(listOf(ALL))
         spCore = spinner(listOf(ALL) + Catalog.cores + UNKNOWN)
         spTag = spinner(listOf(ALL) + Catalog.tags)
+        spAttr = spinner(listOf(ALL))
         spDupes = spinner(DUPES)
         filterPanel.addView(labeledRow("Category", spCategory))
         filterPanel.addView(labeledRow("Slot / weapon type", spSlot))
@@ -258,6 +250,7 @@ class MainActivity : AppCompatActivity() {
         filterPanel.addView(labeledRow("Brand / gear set", spBrand))
         filterPanel.addView(labeledRow("Talent", spTalent))
         filterPanel.addView(labeledRow("Core attribute", spCore))
+        filterPanel.addView(labeledRow("Has attribute", spAttr))
         filterPanel.addView(labeledRow("Tag", spTag))
         filterPanel.addView(labeledRow("Duplicates", spDupes))
         cbFavorites = CheckBox(this).apply { text = "Favorites only"; setTextColor(SUBTLE); setOnCheckedChangeListener { _, _ -> renderItems() } }
@@ -310,12 +303,12 @@ class MainActivity : AppCompatActivity() {
     private fun updateProfileHint() {
         if (selectedUri == null) return
         val p = chosenProfile()
-        cbEnhance.isChecked = p == CaptureProfile.FHD_1080 || p == CaptureProfile.HD_720
+        cbEnhance.isChecked = p == CaptureProfile.HD_720
         val scaleNote = when (p) {
-            CaptureProfile.UHD_4K -> "frames reduced to 2560 px wide for OCR"
-            CaptureProfile.QHD_1440 -> "frames read at native size"
-            CaptureProfile.FHD_1080 -> "frames upscaled 1.5× so small item text is readable"
-            CaptureProfile.HD_720 -> "frames upscaled 2× (low detail, review results carefully)"
+            CaptureProfile.UHD_4K -> "item panel read at native size"
+            CaptureProfile.QHD_1440 -> "item panel upscaled 1.5× for OCR"
+            CaptureProfile.FHD_1080 -> "item panel upscaled 2× so small text is readable"
+            CaptureProfile.HD_720 -> "item panel upscaled 2.5× (low detail, review results carefully)"
             CaptureProfile.AUTO -> ""
         }
         val res = if (detectedWidth > 0) "${detectedWidth}×${detectedHeight}" else "unknown resolution"
@@ -398,42 +391,122 @@ class MainActivity : AppCompatActivity() {
     ): List<ScannedItem> = withContext(Dispatchers.IO) {
         val retriever = MediaMetadataRetriever()
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        val frames = mutableListOf<Pair<Long, String>>()
+        val frames = mutableListOf<FrameRead>()
         try {
             retriever.setDataSource(this@MainActivity, uri)
             val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
             if (durationMs <= 0L) return@withContext emptyList<ScannedItem>()
             var t = 0L
             var n = 0
+            var lastBandTop = -1
             while (t <= durationMs && isActive) {
-                val src = retriever.getFrameAtTime(t * 1000L, MediaMetadataRetriever.OPTION_CLOSEST)
-                if (src != null) {
-                    val bmp = prepareForOcr(src, profile.ocrScale(src.width), enhance)
-                    if (bmp !== src) src.recycle()
-                    val text = normalize(recognizer.process(InputImage.fromBitmap(bmp, 0)).awaitRecognizedText())
-                    bmp.recycle()
-                    if (text.isNotBlank()) frames.add(t to text)
+                val frame = retriever.getFrameAtTime(t * 1000L, MediaMetadataRetriever.OPTION_CLOSEST)
+                if (frame != null) {
+                    val read = readFrame(frame, t, profile, enhance, recognizer, lastBandTop)
+                    frame.recycle()
+                    if (read.bandTop >= 0) lastBandTop = read.bandTop
+                    frames.add(read)
                 }
                 n++
                 if (n % 2 == 0) {
                     val done = t / 1000; val total = durationMs / 1000
-                    withContext(Dispatchers.Main) { status.text = "Scanning ${profile.label}: ${done}s of ${total}s…" }
+                    val found = frames.count { it.rowName.isNotBlank() }
+                    withContext(Dispatchers.Main) {
+                        status.text = "Scanning ${profile.label}: ${done}s of ${total}s… (item highlight found in $found frames)"
+                    }
                 }
                 t += stepMs
             }
         } finally {
             retriever.release(); recognizer.close()
         }
-        consolidate(frames, stepMs, holdMs, source)
+        ScanLogic.group(frames, stepMs, holdMs).map { g ->
+            val item = ScannedItem(nextId++, source, g.startMs, g.endMs, g.panelText)
+            item.name = g.name
+            ItemParser.apply(item, keepName = g.name.isNotBlank(), panels = g.panels)
+            item
+        }
     }
 
-    /** Scales (down for 4K, up for 1080p) and optionally boosts contrast in a single drawing pass. */
-    private fun prepareForOcr(src: Bitmap, rawScale: Float, enhance: Boolean): Bitmap {
-        val scale = minOf(rawScale, MAX_OCR_WIDTH.toFloat() / src.width)
-        if (kotlin.math.abs(scale - 1f) < 0.01f && !enhance) return src
-        val w = (src.width * scale).toInt().coerceAtLeast(1)
-        val h = (src.height * scale).toInt().coerceAtLeast(1)
-        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    /**
+     * Reads one frame of the stash screen: finds the highlighted row in the item list, reads its name,
+     * and reads the item details panel. Only these two areas are read, so the character stats, the rest
+     * of the list and the button hints no longer pollute the item text.
+     */
+    private suspend fun readFrame(
+        frame: Bitmap, ms: Long, profile: CaptureProfile, enhance: Boolean,
+        recognizer: com.google.mlkit.vision.text.TextRecognizer, lastBandTop: Int
+    ): FrameRead {
+        val w = frame.width; val h = frame.height
+        // Crops are small, so upscale them for OCR: 1080p ×2, 1440p ×1.5, 4K ×1.
+        val scale = (2160f / h).coerceIn(1f, 2.5f) * if (profile == CaptureProfile.HD_720) 1.2f else 1f
+        val top = (StashLayout.TOP * h).toInt()
+        val bottom = (StashLayout.BOTTOM * h).toInt()
+
+        // 1) Highlighted row in the list column.
+        val lx = (StashLayout.LIST_LEFT * w).toInt(); val lw = (StashLayout.LIST_RIGHT * w).toInt() - lx
+        val lh = bottom - top
+        val px = IntArray(lw * lh)
+        frame.getPixels(px, 0, lw, lx, top, lw, lh)
+        val ratios = FloatArray(lh) { y ->
+            var hit = 0; var cnt = 0
+            var x = 0
+            while (x < lw) {
+                val c = px[y * lw + x]
+                if (StashLayout.isHighlight((c shr 16) and 0xFF, (c shr 8) and 0xFF, c and 0xFF)) hit++
+                cnt++; x += 4
+            }
+            hit.toFloat() / cnt
+        }
+        val band = StashLayout.findBand(ratios, (StashLayout.MIN_BAND * h).toInt())
+        var rowName = ""
+        var bandTop = -1
+        var moving = false
+        if (band != null) {
+            bandTop = top + band[0]
+            moving = lastBandTop >= 0 && kotlin.math.abs(bandTop - lastBandTop) > StashLayout.MOVE_TOLERANCE * h
+            val nx = (StashLayout.NAME_LEFT * w).toInt()
+            val ny = (bandTop + StashLayout.NAME_TOP_OFFSET * h).toInt()
+            val nw = (StashLayout.NAME_RIGHT * w).toInt() - nx
+            val nh = (StashLayout.NAME_HEIGHT * h).toInt().coerceAtMost(h - ny)
+            if (nw > 0 && nh > 0) {
+                val nameCrop = crop(frame, nx, ny, nw, nh, scale * 1.5f, enhance = false)
+                rowName = ScanLogic.cleanRowName(recognizer.process(InputImage.fromBitmap(nameCrop, 0)).awaitText()
+                    ?.text.orEmpty())
+                nameCrop.recycle()
+            }
+        }
+
+        // 2) Item details panel.
+        val px0 = (StashLayout.PANEL_LEFT * w).toInt()
+        val panelCrop = crop(frame, px0, top, (StashLayout.PANEL_RIGHT * w).toInt() - px0, bottom - top, scale, enhance)
+        val panelText = recognizer.process(InputImage.fromBitmap(panelCrop, 0)).awaitText()?.let { orderedLines(it) }.orEmpty()
+        panelCrop.recycle()
+        return FrameRead(ms, rowName, bandTop, moving, panelText)
+    }
+
+    /** ML Kit returns blocks in arbitrary order; sort lines top-to-bottom and join lines on the same row. */
+    private fun orderedLines(text: Text): String {
+        val lines = text.textBlocks.flatMap { it.lines }.filter { it.boundingBox != null }
+        if (lines.isEmpty()) return text.text
+        val sorted = lines.sortedBy { it.boundingBox!!.centerY() }
+        val rows = mutableListOf<MutableList<Text.Line>>()
+        for (l in sorted) {
+            val box = l.boundingBox!!
+            val row = rows.lastOrNull()
+            val ref = row?.first()?.boundingBox
+            if (row != null && ref != null && kotlin.math.abs(box.centerY() - ref.centerY()) < ref.height() * 0.55f) row.add(l)
+            else rows.add(mutableListOf(l))
+        }
+        return rows.joinToString("\n") { r -> r.sortedBy { it.boundingBox!!.left }.joinToString("  ") { it.text } }
+    }
+
+    /** Crops a region and scales it, optionally converting to high-contrast grayscale. */
+    private fun crop(src: Bitmap, x: Int, y: Int, w: Int, h: Int, scale: Float, enhance: Boolean): Bitmap {
+        val cx = x.coerceIn(0, src.width - 1); val cy = y.coerceIn(0, src.height - 1)
+        val cw = w.coerceAtMost(src.width - cx).coerceAtLeast(1); val ch = h.coerceAtMost(src.height - cy).coerceAtLeast(1)
+        val ow = (cw * scale).toInt().coerceAtLeast(1); val oh = (ch * scale).toInt().coerceAtLeast(1)
+        val out = Bitmap.createBitmap(ow, oh, Bitmap.Config.ARGB_8888)
         val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
         if (enhance) {
             val c = 1.6f
@@ -447,52 +520,14 @@ class MainActivity : AppCompatActivity() {
             )))
             paint.colorFilter = ColorMatrixColorFilter(m)
         }
-        Canvas(out).drawBitmap(src, Rect(0, 0, src.width, src.height), RectF(0f, 0f, w.toFloat(), h.toFloat()), paint)
+        Canvas(out).drawBitmap(src, Rect(cx, cy, cx + cw, cy + ch), RectF(0f, 0f, ow.toFloat(), oh.toFloat()), paint)
         return out
     }
 
-    private fun consolidate(frames: List<Pair<Long, String>>, stepMs: Long, holdMs: Long, source: String): List<ScannedItem> {
-        if (frames.isEmpty()) return emptyList()
-        val gapMs = maxOf(2000L, stepMs * 3)
-        val output = mutableListOf<ScannedItem>()
-        var start = frames.first().first
-        var last = start
-        val group = mutableListOf(frames.first().second)
-        fun flush() {
-            if (last - start >= holdMs) {
-                val item = ScannedItem(nextId++, source, start, last, mostComplete(group))
-                ItemParser.apply(item)
-                output.add(item)
-            }
-        }
-        for ((ms, txt) in frames.drop(1)) {
-            if (ms - last <= gapMs && similarity(group.last(), txt) >= 0.58) {
-                group.add(txt); last = ms
-            } else {
-                flush()
-                start = ms; last = ms; group.clear(); group.add(txt)
-            }
-        }
-        flush()
-        return output
-    }
-
-    private fun normalize(s: String) = s.lines().map { it.trim().replace(Regex("\\s+"), " ") }
-        .filter { it.length > 1 }.distinct().joinToString("\n")
-
-    private fun similarity(a: String, b: String): Double {
-        val aa = a.lowercase(Locale.US).split(Regex("\\W+")).filter { it.length > 2 }.toSet()
-        val bb = b.lowercase(Locale.US).split(Regex("\\W+")).filter { it.length > 2 }.toSet()
-        if (aa.isEmpty() || bb.isEmpty()) return 0.0
-        return aa.intersect(bb).size.toDouble() / aa.union(bb).size
-    }
-
-    private fun mostComplete(texts: List<String>) = texts.maxByOrNull { it.length } ?: ""
-
-    private suspend fun com.google.android.gms.tasks.Task<Text>.awaitRecognizedText(): String =
+    private suspend fun com.google.android.gms.tasks.Task<Text>.awaitText(): Text? =
         suspendCancellableCoroutine { cont ->
-            addOnSuccessListener { if (cont.isActive) cont.resume(it.text) }
-            addOnFailureListener { if (cont.isActive) cont.resume("") }
+            addOnSuccessListener { if (cont.isActive) cont.resume(it) }
+            addOnFailureListener { if (cont.isActive) cont.resume(null) }
         }
 
     // ---------------------------------------------------------------- Filtering, sorting, grouping
@@ -502,17 +537,19 @@ class MainActivity : AppCompatActivity() {
             .sortedWith(compareBy({ it == NONE_DETECTED }, { it })))
         setOptions(spTalent, listOf(ALL) + items.map { it.talentOrNone }.distinct()
             .sortedWith(compareBy({ it == NONE_DETECTED }, { it })))
+        setOptions(spAttr, listOf(ALL) + items.flatMap { it.attributeNames }.distinct().sorted())
     }
 
     private fun filtered(): List<ScannedItem> {
         val q = etSearch.text.toString().trim().lowercase(Locale.US)
         val cat = sel(spCategory); val slot = sel(spSlot); val rar = sel(spRarity); val brand = sel(spBrand)
         val talent = sel(spTalent); val core = sel(spCore); val tag = sel(spTag); val dupes = sel(spDupes)
+        val attr = sel(spAttr)
         val counts = items.groupingBy { it.dupKey }.eachCount()
         val seen = mutableSetOf<String>()
 
         val base = items.filter { i ->
-            (q.isEmpty() || listOf(i.name, i.brandOrSet, i.talent, i.notes, i.rawText, i.slot)
+            (q.isEmpty() || listOf(i.name, i.brandOrSet, i.talent, i.notes, i.rawText, i.slot, i.attributes, i.mods, i.augment)
                 .any { it.lowercase(Locale.US).contains(q) }) &&
                 (cat == ALL || i.category == cat) &&
                 (slot == ALL || i.slot == slot) &&
@@ -521,6 +558,7 @@ class MainActivity : AppCompatActivity() {
                 (talent == ALL || i.talentOrNone == talent) &&
                 (core == ALL || i.core == core) &&
                 (tag == ALL || i.tag == tag) &&
+                (attr == ALL || attr in i.attributeNames) &&
                 (!cbFavorites.isChecked || i.favorite) &&
                 (!cbNeedsReview.isChecked || !i.reviewed) &&
                 (!cbHasTalent.isChecked || i.talent.isNotBlank()) &&
@@ -534,6 +572,8 @@ class MainActivity : AppCompatActivity() {
             SORTS[5] -> base.sortedByDescending { it.mainStat }
             SORTS[6] -> base.sortedWith(compareBy({ Catalog.tags.indexOf(it.tag) }, { it.displayName }))
             SORTS[7] -> base.sortedWith(compareBy({ it.talent.isBlank() }, { it.talent }, { it.displayName }))
+            SORTS[8] -> base.sortedByDescending { it.rpm }
+            SORTS[9] -> base.sortedByDescending { it.mag }
             else -> base.sortedWith(compareBy({ it.source }, { it.startMs }))
         }
         return if (dupes == DUPES[1]) sorted.filter { seen.add(it.dupKey) } else sorted
@@ -613,8 +653,16 @@ class MainActivity : AppCompatActivity() {
         val line3 = mutableListOf<String>()
         if (item.talent.isNotBlank()) line3.add("Talent: ${item.talent}")
         if (item.core != UNKNOWN) line3.add("Core: ${item.core}")
-        if (item.mainStat > 0) line3.add("Stat: %,d".format(item.mainStat))
+        if (item.category == "Weapon") {
+            if (item.mainStat > 0) line3.add("DMG %,d".format(item.mainStat))
+            if (item.rpm > 0) line3.add("RPM ${item.rpm}")
+            if (item.mag > 0) line3.add("MAG ${item.mag}")
+        } else if (item.mainStat > 0) line3.add("Stat: %,d".format(item.mainStat))
         if (line3.isNotEmpty()) body.addView(label(line3.joinToString("  •  "), 13f, SUBTLE))
+        if (item.attributes.isNotBlank()) body.addView(label(item.attributes.replace("; ", "  •  "), 12f, MUTED))
+        val extra = listOf(item.augment.takeIf { it.isNotBlank() }?.let { "Augment: $it" }, item.expertise.ifBlank { null })
+            .filterNotNull()
+        if (extra.isNotEmpty()) body.addView(label(extra.joinToString("  •  "), 12f, MUTED))
         val reviewTxt = if (item.reviewed) "Reviewed" else "Needs review"
         body.addView(label("${item.tag}  •  $reviewTxt  •  ${item.startSeconds}–${item.endSeconds}s  •  ${item.source}",
             11f, if (item.reviewed) MUTED else WARN))
@@ -648,9 +696,19 @@ class MainActivity : AppCompatActivity() {
         val gearSet = field("Gear set", item.gearSet)
         val talent = field("Talent", item.talent)
         val stat = EditText(this).apply {
-            hint = "Main stat value"; setText(if (item.mainStat > 0) item.mainStat.toString() else "")
+            hint = "Total damage / main stat"; setText(if (item.mainStat > 0) item.mainStat.toString() else "")
             inputType = InputType.TYPE_CLASS_NUMBER
         }
+        val rpm = EditText(this).apply {
+            hint = "RPM"; setText(if (item.rpm > 0) item.rpm.toString() else ""); inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        val mag = EditText(this).apply {
+            hint = "Magazine"; setText(if (item.mag > 0) item.mag.toString() else ""); inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        val attrs = field("Attributes (Name value%; …)", item.attributes)
+        val augment = field("Augment", item.augment)
+        val expertise = field("Expertise", item.expertise)
+        val mods = field("Mods", item.mods)
         val notes = field("Notes (e.g. recalibrate CHC → CHD)", item.notes)
         val fav = CheckBox(this).apply { text = "Favorite"; isChecked = item.favorite }
         val raw = EditText(this).apply {
@@ -668,6 +726,8 @@ class MainActivity : AppCompatActivity() {
                 core.setSelection((Catalog.cores + UNKNOWN).indexOf(p.core).coerceAtLeast(0))
                 brand.setText(p.brand); gearSet.setText(p.gearSet); talent.setText(p.talent)
                 stat.setText(if (p.mainStat > 0) p.mainStat.toString() else "")
+                rpm.setText(if (p.rpm > 0) p.rpm.toString() else ""); mag.setText(if (p.mag > 0) p.mag.toString() else "")
+                attrs.setText(p.attributes); augment.setText(p.augment); expertise.setText(p.expertise); mods.setText(p.mods)
             }
         }
         val form = LinearLayout(this).apply {
@@ -676,7 +736,8 @@ class MainActivity : AppCompatActivity() {
             addView(labeledRow("Category", category)); addView(labeledRow("Slot / type", slot))
             addView(labeledRow("Rarity", rarity)); addView(labeledRow("Core attribute", core))
             addView(labeledRow("Tag", tag))
-            addView(brand); addView(gearSet); addView(talent); addView(stat); addView(notes); addView(fav)
+            addView(brand); addView(gearSet); addView(talent); addView(stat); addView(rpm); addView(mag)
+            addView(attrs); addView(augment); addView(expertise); addView(mods); addView(notes); addView(fav)
             addView(label("Recognized text", 12f, MUTED).apply { setPadding(0, dp(8), 0, 0) })
             addView(raw); addView(redetect)
         }
@@ -700,6 +761,12 @@ class MainActivity : AppCompatActivity() {
                 item.talent = talent.text.toString().trim()
                 item.mainStat = stat.text.toString().toLongOrNull() ?: 0L
                 item.notes = notes.text.toString().trim()
+                item.rpm = rpm.text.toString().toIntOrNull() ?: 0
+                item.mag = mag.text.toString().toIntOrNull() ?: 0
+                item.attributes = attrs.text.toString().trim()
+                item.augment = augment.text.toString().trim()
+                item.expertise = expertise.text.toString().trim()
+                item.mods = mods.text.toString().trim()
                 item.favorite = fav.isChecked
                 item.rawText = raw.text.toString()
                 item.reviewed = true
@@ -714,7 +781,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun resetFilters() {
         etSearch.setText("")
-        listOf(spCategory, spSlot, spRarity, spBrand, spTalent, spCore, spTag, spDupes, spSort, spGroup)
+        listOf(spCategory, spSlot, spRarity, spBrand, spTalent, spCore, spTag, spAttr, spDupes, spSort, spGroup)
             .forEach { it.setSelection(0) }
         cbFavorites.isChecked = false; cbNeedsReview.isChecked = false; cbHasTalent.isChecked = false
         renderItems()
