@@ -36,11 +36,13 @@ jobs:
       - name: Install Android SDK packages
         shell: bash
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          # `yes` is killed by SIGPIPE (exit 141) once sdkmanager stops reading.
+          # With pipefail enabled that fails the step, so ignore it here.
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
             "platforms;android-35" \
-            "build-tools;35.0.0"
+            "build-tools;35.0.0" > /dev/null
 
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace

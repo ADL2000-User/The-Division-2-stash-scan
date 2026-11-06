@@ -36,7 +36,7 @@ data class ScannedItem(
         val talent = match(Regex("(?i)\\b(obliterate|unbreakable|glass cannon|vigilance|strained|killer|optimist|ignited|in sync|overwatch|perfect [a-z ]+)\\b"))
         val slot = match(Regex("(?i)\\b(mask|backpack|chest|gloves|holster|kneepads|rifle|assault rifle|smg|lmg|shotgun|marksman rifle|pistol)\\b"))
         val armor = match(Regex("(?i)(armor|armour|\\d{1,3}[,.]?\\d{3}\\s*armor)"))
-        return listOf(startSeconds,endSeconds,title,slot,brand,talent,armor,rawText.replace("\n"," | ")).joinToString(",") { csvEscape(it) }
+        return listOf(startSeconds.toString(),endSeconds.toString(),title,slot,brand,talent,armor,rawText.replace("\n"," | ")).joinToString(",") { csvEscape(it) }
     }
 }
 private fun csvEscape(s: String) = "\"" + s.replace("\"","\"\"") + "\""
