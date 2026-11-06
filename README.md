@@ -1,6 +1,16 @@
-# Division 2 Stash Scanner — Xbox 4K profile (v0.2)
+# Division 2 Stash Scanner — Xbox 4K / 1440p / 1080p (v0.3)
 
 Android Studio starter project. This is source code, not a compiled APK.
+
+## What changed in v0.3
+- **1080p (and 1440p) support.** Resolution is read from the video and a capture profile is chosen automatically (4K, 1440p, 1080p, 720p best-effort), or pick one manually. 1080p frames are upscaled 1.5× before OCR so small tooltip text stays readable; 4K frames are still reduced to 2560 px wide to save memory.
+- Optional contrast boost (grayscale + contrast, on by default for 1080p/720p), 0.5-second sampling, and an adjustable minimum time on each item (2–5 s).
+- **Division 2 field detection:** category (weapon/gear), gear slot or weapon type, rarity (Exotic, Named, Gear Set, High-End…), brand, gear set, talent (incl. "Perfect" talents), core attribute (Weapon Damage / Armor / Skill Tier) and main stat value. Attribute lines like "+12% Assault Rifle Damage" are ignored when detecting the slot.
+- **Filters:** text search plus category, slot/type, rarity, brand/gear set, talent, core attribute, tag, duplicates, favorites, needs-review and has-talent.
+- **Organization:** sort by video order, name, slot, brand/set, rarity, main stat, tag or talent; group by any of those (or source video) with counts; rarity color strips; duplicate counts (×N) and one-tap "Remove repeats".
+- **Tags & review:** tag items Keep / Build piece / Recalibrate / Sell, bulk-tag everything currently shown, long-press to favorite, full edit form with "Re-detect fields from text" and notes.
+- The list is saved between sessions, and new recordings can be added to it, so a large stash can be built up across several clips.
+- CSV export of the shown (filtered + sorted) items or all items, with the new columns.
 
 ## What changed in v0.2
 - Xbox / 4K capture profile labels and workflow guidance.
